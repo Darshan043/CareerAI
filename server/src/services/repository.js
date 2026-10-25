@@ -135,16 +135,26 @@ export async function updateById(collection, id, data) {
 export async function upsert(collection, filter, createData, updateData = {}) {
   assertStorageAvailable();
   if (dbState.mode === "mongo") {
+    const model = modelFor(collection);
     const insertOnly = Object.fromEntries(Object.entries(createData).filter(([key]) => !(key in updateData)));
-    return modelFor(collection)
-      .findOneAndUpdate(filter, { $set: updateData, $setOnInsert: insertOnly }, {
-        upsert: true,
-        new: true,
-        runValidators: true,
-        setDefaultsOnInsert: true
-      })
-      .lean()
-      .exec();
+    try {
+      return await model
+        .findOneAndUpdate(filter, { $set: updateData, $setOnInsert: insertOnly }, {
+          upsert: true,
+          new: true,
+          runValidators: true,
+          setDefaultsOnInsert: true
+        })
+        .lean()
+        .exec();
+    } catch (error) {
+      if (collection !== "internships" || error?.code !== 11000) throw error;
+      // Another request may have inserted the indexed internship after this
+      // upsert's lookup. Return that winner instead of failing the API request.
+      const existing = await model.findOne(filter).lean().exec();
+      if (existing) return existing;
+      throw error;
+    }
   }
   return memoryStore.upsertOne(collection, memoryMatches(collection, filter), createData, updateData);
 }

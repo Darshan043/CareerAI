@@ -6,11 +6,13 @@ import { dedupeInternships, mapApplicationLink } from "../src/utils/internshipLi
 
 process.env.JWT_SECRET ||= "careerpilot-integration-test-secret-0123456789";
 
-const [{ app }, repository, { env }, { normalizeJSearchJob, searchJSearchJobs, clearJSearchState }, { normalizeHimalayasJob, searchHimalayasJobs, clearHimalayasCache }, { searchJobListings }, { generateGeminiJson }, { scoreInternship }] =
+const [{ app }, repository, { env }, { dbState }, { Internship }, { normalizeJSearchJob, searchJSearchJobs, clearJSearchState }, { normalizeHimalayasJob, searchHimalayasJobs, clearHimalayasCache }, { searchJobListings }, { generateGeminiJson }, { scoreInternship }] =
   await Promise.all([
     import("../src/app.js"),
     import("../src/services/repository.js"),
     import("../src/config/env.js"),
+    import("../src/config/db.js"),
+    import("../src/models/Internship.js"),
     import("../src/services/jsearchService.js"),
     import("../src/services/himalayasService.js"),
     import("../src/services/jobSearchService.js"),
@@ -18,6 +20,7 @@ const [{ app }, repository, { env }, { normalizeJSearchJob, searchJSearchJobs, c
     import("../src/agents/matchingAgent.js")
   ]);
 const { normalizeRemotive } = await import("../src/agents/discoveryAgent.js");
+const { generateResumeVariant } = await import("../src/agents/applicationPreparationAgent.js");
 
 const nativeFetch = globalThis.fetch;
 let server;
@@ -658,6 +661,151 @@ test("Gemini sends API credentials only in request headers and parses JSON respo
   }
 });
 
+test("Gemini reports safe configuration, credential, quota, timeout, and upstream errors", async () => {
+  const previousKey = env.geminiApiKey;
+  env.geminiApiKey = "gemini-test-secret";
+  const expectGeminiError = async (fetchImpl, status, messagePattern) => {
+    await assert.rejects(
+      generateGeminiJson("Return JSON.", { fetchImpl }),
+      (error) => {
+        assert.equal(error.status, status);
+        assert.match(error.message, messagePattern);
+        assert.equal(error.message.includes("gemini-test-secret"), false);
+        assert.equal(error.message.includes("provider-private-detail"), false);
+        return true;
+      }
+    );
+  };
+
+  try {
+    env.geminiApiKey = "   ";
+    await expectGeminiError(async () => {
+      throw new Error("Fetch must not run without a configured key.");
+    }, 503, /GEMINI_API_KEY/);
+
+    env.geminiApiKey = "gemini-test-secret";
+    const providerResponse = (status, error) => async () => new Response(JSON.stringify({ error }), { status });
+    await expectGeminiError(
+      providerResponse(401, { message: "provider-private-detail gemini-test-secret" }),
+      503,
+      /rejected the configured API key/
+    );
+    await expectGeminiError(
+      providerResponse(400, { status: "API_KEY_INVALID", message: "provider-private-detail gemini-test-secret" }),
+      503,
+      /rejected the configured API key/
+    );
+    await expectGeminiError(
+      providerResponse(429, { status: "RESOURCE_EXHAUSTED", message: "provider-private-detail" }),
+      429,
+      /quota is exhausted/
+    );
+    await expectGeminiError(
+      providerResponse(429, { status: "RATE_LIMIT_EXCEEDED", message: "provider-private-detail" }),
+      429,
+      /rate limit reached/
+    );
+    await expectGeminiError(
+      async () => { const error = new Error("upstream timeout"); error.name = "TimeoutError"; throw error; },
+      504,
+      /timed out/
+    );
+    await expectGeminiError(
+      providerResponse(404, { message: "provider-private-detail" }),
+      503,
+      /GEMINI_MODEL/
+    );
+    await expectGeminiError(
+      providerResponse(503, { message: "provider-private-detail" }),
+      502,
+      /could not complete this request/
+    );
+  } finally {
+    env.geminiApiKey = previousKey;
+  }
+});
+
+test("application material generation requires Gemini and returns only its generated copy", async () => {
+  const previousKey = env.geminiApiKey;
+  const originalFetch = globalThis.fetch;
+  const profile = {
+    resumeText: "Skills: React, JavaScript\nProjects\nBuilt a React course planner.",
+    skills: ["React", "JavaScript"],
+    projects: ["Built a React course planner."],
+    experience: []
+  };
+  const internship = { title: "Frontend Intern", company: "Example Company", skillsRequired: ["React"] };
+
+  try {
+    env.geminiApiKey = "";
+    await assert.rejects(generateResumeVariant(profile, internship, "Student"), (error) => {
+      assert.equal(error.status, 503);
+      assert.match(error.message, /GEMINI_API_KEY/);
+      return true;
+    });
+
+    env.geminiApiKey = "test-only-key";
+    globalThis.fetch = async (input, options) => {
+      assert.match(String(input), /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.6-flash:generateContent$/);
+      assert.equal(options.headers["x-goog-api-key"], "test-only-key");
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({
+          coverLetter: "Gemini generated cover letter.",
+          resumeBulletSuggestions: ["Built a React course planner."],
+          applicationAnswers: [{ question: "Why this role?", answer: "Gemini generated answer." }]
+        }) }] } }]
+      }), { status: 200 });
+    };
+
+    const generated = await generateResumeVariant(profile, internship, "Student");
+    assert.equal(generated.aiProvider, "Gemini");
+    assert.equal(generated.aiGenerated, true);
+    assert.equal(generated.coverLetter, "Gemini generated cover letter.");
+    assert.deepEqual(generated.applicationAnswers, [{ question: "Why this role?", answer: "Gemini generated answer." }]);
+  } finally {
+    env.geminiApiKey = previousKey;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Mongo internship upsert recovers a concurrent duplicate-key insert by its unique filter", async () => {
+  const originalMode = dbState.mode;
+  const originalFindOneAndUpdate = Internship.findOneAndUpdate;
+  const originalFindOne = Internship.findOne;
+  const filter = {
+    company: "Concurrent Import Test",
+    title: "Platform Intern",
+    applyLink: "https://example.invalid/jobs/platform-intern"
+  };
+  const winner = { _id: "winner-id", ...filter, source: "JSearch" };
+  let lookupFilter;
+
+  dbState.mode = "mongo";
+  Internship.findOneAndUpdate = () => ({
+    lean: () => ({
+      exec: async () => {
+        const error = new Error("duplicate key");
+        error.code = 11000;
+        throw error;
+      }
+    })
+  });
+  Internship.findOne = (query) => {
+    lookupFilter = query;
+    return { lean: () => ({ exec: async () => winner }) };
+  };
+
+  try {
+    const saved = await repository.upsert("internships", filter, { ...winner, externalId: "provider-id" }, winner);
+    assert.deepEqual(lookupFilter, filter);
+    assert.deepEqual(saved, winner);
+  } finally {
+    dbState.mode = originalMode;
+    Internship.findOneAndUpdate = originalFindOneAndUpdate;
+    Internship.findOne = originalFindOne;
+  }
+});
+
 test("resume analysis returns structured Gemini strengths and gaps from extracted text", async () => {
   const previousKey = env.geminiApiKey;
   const originalFetch = globalThis.fetch;
@@ -822,15 +970,16 @@ test("authenticated Himalayas results are persisted, matched, and kept in the ow
     });
 
     const externalId = `integration-${userSuffix}`;
-    testExternalIds.push(externalId);
     let receivedCursor = "";
     globalThis.fetch = async (input, options) => {
       if (String(input).startsWith("https://himalayas.app/jobs/api/search")) {
         receivedCursor = new URL(input).searchParams.get("offset") || "";
+        const providerId = `${externalId}-${receivedCursor || "first"}`;
+        testExternalIds.push(providerId);
         return new Response(JSON.stringify({
           totalCount: 2,
           jobs: [{
-            guid: externalId,
+            guid: providerId,
             title: "Frontend Developer Intern",
             companyName: "Integration Test Company",
             companySlug: "integration-test-company",
@@ -869,6 +1018,12 @@ test("authenticated Himalayas results are persisted, matched, and kept in the ow
     assert.equal(nextPageResponse.status, 200);
     assert.equal(receivedCursor, "1");
     assert.equal((await nextPageResponse.json()).count, 1);
+    const uniqueInternships = await repository.getAll("internships", {
+      company: "Integration Test Company",
+      title: "Frontend Developer Intern",
+      applyLink: "https://himalayas.app/companies/integration-test-company/jobs/frontend-developer-intern"
+    });
+    assert.equal(uniqueInternships.length, 1);
     const listingResponse = await nativeFetch(`${baseUrl}/api/internships`, { headers });
     assert.equal(listingResponse.status, 200);
     const visibleListings = (await listingResponse.json()).internships;

@@ -59,9 +59,12 @@ export const searchInternships = asyncHandler(async (req, res) => {
   });
   const internships = [];
   for (const internship of discovered) {
-    const filter = internship.externalId
-      ? { source: internship.source || "Himalayas", externalId: internship.externalId }
-      : { company: internship.company, title: internship.title, applyLink: internship.applyLink };
+    // Match the database's unique index so repeat imports converge on one row.
+    const filter = {
+      company: internship.company,
+      title: internship.title,
+      applyLink: internship.applyLink
+    };
     const saved = await upsert("internships", filter, internship, internship);
     const match = profile?.resumeText || profile?.skills?.length || profile?.preferences?.roles?.length
       ? await scoreInternship(profile, saved)

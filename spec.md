@@ -1,5 +1,33 @@
 # CareerPilot AI implementation status
 
+## Production readiness corrections — 2026-10-26
+
+### Vercel routing and deployment evidence
+
+- Added `client/vercel.json` with a Vercel SPA rewrite to `/index.html`, and a client test that guards the rewrite. The local production build contains `dist/index.html`. A read-only request to the deployed `/login` path returned HTTP 404 before this change, consistent with Vercel not serving the SPA entry document for React Router paths. The main root URL response could not be reliably read from this environment, so its availability on other devices is not verified.
+- Source inspection confirms the repository root contains `client/` and `server/`; the frontend Vite app and package manifest are under `client/`. Set Vercel Root Directory to `client`, Build Command to `npm run build`, Output Directory to `dist`, Production Branch to `main`, and `VITE_API_URL` to `https://careerai-x00j.onrender.com` (the shared Axios client adds exactly one `/api`). Keep `https://career-ai-indol-delta.vercel.app` as the intended production domain.
+- The Git remote `main` resolved to the checked-out pre-change commit `cfd07101218f5eee1c98d511bbdd03bbec8029a2`. Vercel project ownership/domain assignment, latest successful deployment and alias, deployment protection, and production branch settings require dashboard access and remain unverified. No physical phone or alternate network test was performed. Keep production access public by reviewing Vercel Deployment Protection settings.
+
+### Gemini request behavior
+
+- The backend uses direct Google Gemini REST (`v1beta/models/{GEMINI_MODEL}:generateContent`), not an SDK package. It sends `GEMINI_API_KEY` in the `x-goog-api-key` header and requests JSON output. `GEMINI_MODEL` defaults to `gemini-3.6-flash`, which Google currently lists as a stable Gemini API model ([model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash)).
+- Confirmed code defect: when `GEMINI_API_KEY` was absent, the service returned `null`, allowing resume analysis, roadmap, and application-material flows to silently use Ollama or rule-based canned output. Missing configuration now returns a safe 503. The AI flows no longer silently switch providers or use canned text when Gemini is unavailable or returns an invalid structure.
+- Provider errors now map to safe client messages: invalid credentials/configuration and unknown model to 503, quota/billing exhaustion and rate limits to 429 with distinct messages, request timeout to 504, and network/upstream failures or malformed output to 502. Provider response bodies and API keys are not forwarded or logged. Resume analysis is `POST /api/profile/upload-resume`; skill roadmap is authenticated `GET /api/skill-gaps/:internshipId`; application materials are authenticated `POST /api/application-materials/generate`. They use the existing `/api` client base and normal auth/CORS middleware.
+- `server/.env.example` names `GEMINI_API_KEY` and `GEMINI_MODEL`. The actual Render values/key validity, model access, quota, and a live generation request could not be inspected without Render/Google credentials. Configure those variables in Render; keep the key server-side only. A real request is still required after deployment.
+
+### Internship duplicate-key correction
+
+- Confirmed mismatch: internship search used `{ source, externalId }` as its upsert filter whenever an external ID existed, while `Internship` enforces unique `{ company, title, applyLink }`. Separate provider IDs or concurrent imports could therefore attempt a second row that conflicts with the existing unique index and produce `E11000`.
+- Search imports now upsert against the exact compound unique key. Mongo internship upsert catches a concurrent `11000`, reads the winning row using that same key, and returns it. The existing unique index and `careerpilot` database are unchanged; no production records were deleted or modified by these checks. The scheduled discovery and seed paths already use the compound key; discovery also handles duplicate-key races.
+
+### CORS, API and verification status
+
+- CORS still uses exact `CLIENT_URL` and comma-separated `CLIENT_URLS`, with localhost allowed only in development, no-Origin requests allowed for server-to-server calls, and unconfigured browser origins rejected. API paths remain consistently under `/api`. Error middleware returns generic messages and does not send stacks to browsers.
+- Auth code and regression tests cover register/login/protected identity. Dashboard, profile, internship search, tracker, and analytics use the shared authenticated API layer. Resume parsing, AI roadmap, and application-material creation use authenticated backend routes. This was code/test inspection, not a real signed-in production user journey.
+- Verification on 2026-10-26: `server npm.cmd test` **29 passed, 0 failed**; `server npm.cmd run lint` **passed**; `client node.exe --test` **6 passed, 0 failed**; `client npm.cmd run build` **passed**; `client npm.cmd run lint` **0 errors, 4 existing React effect warnings** in `ApplicationTracker.jsx` and `InternshipDetails.jsx`.
+- Changed files: `client/vercel.json`, `client/test/deploymentConfig.test.js`, `server/src/controllers/internshipController.js`, `server/src/services/repository.js`, `server/src/services/geminiService.js`, `server/src/agents/profileAgent.js`, `server/src/agents/applicationPreparationAgent.js`, `server/src/agents/skillGapAgent.js`, `server/test/integrations.test.js`, and this `spec.md` section.
+- Deployment is not verified as fixed. Push these changes, confirm Render redeploys the updated backend, set/check its CORS and Gemini variables, and confirm Vercel uses `client` as its root directory and assigns the intended domain to a successful production deployment. Then test `/`, `/login`, and a protected client route from a private window and another phone/network. For Gemini, sign in and upload a valid resume or generate application material; confirm a successful response labels the result `Gemini` and inspect Render logs for sanitized upstream errors if it fails. Never print the key in logs or the browser.
+
 ## Vercel CORS allowlist configuration — 2026-10-25
 
 - Removed the single hardcoded Vercel origin from `server/src/app.js`. CORS now checks the current `CLIENT_URL` plus comma-separated `CLIENT_URLS` values, so intended deployment origins are managed in Render environment settings without embedding a list of temporary preview URLs in source.

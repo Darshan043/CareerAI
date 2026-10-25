@@ -1,4 +1,3 @@
-import { generateLocalText } from "../services/ollamaService.js";
 import { generateGeminiJson } from "../services/geminiService.js";
 import { normalizeSkill, uniqueStrings } from "../utils/text.js";
 import { httpError } from "../utils/httpError.js";
@@ -45,91 +44,36 @@ function tailorSkillTokens(originalTokens, requiredSkills, matchedSkills) {
   });
 }
 
-function buildFallbackCopy(profile, internship, studentName, matchedSkills) {
-  const candidate = studentName || "Applicant";
-  const role = internship.title;
-  const company = internship.company;
-  const skills = matchedSkills.slice(0, 5).map(prettySkill);
-  const experience = [...(profile.projects || []), ...(profile.experience || [])].slice(0, 2);
-  const grounding = experience.length
-    ? `My resume highlights ${experience.map((item) => item.replace(/[.\s]+$/, "")).join("; ")}.`
-    : skills.length
-      ? `My resume documents hands-on skills in ${skills.join(", ")}.`
-      : "I am eager to contribute and continue learning through practical work.";
-  return {
-    coverLetter: `Dear Hiring Team,\n\nI am applying for the ${role} opportunity at ${company}. ${grounding}\n\nI would welcome the opportunity to discuss how my background fits the work. Thank you for your consideration.\n\nSincerely,\n${candidate}`,
-    resumeBulletSuggestions: experience.map((item) => `Review this resume evidence for a role-relevant bullet: ${item}`),
-    applicationAnswers: [
-      {
-        question: "Why are you interested in this internship?",
-        answer: `I am interested in the ${role} opportunity at ${company} because it aligns with my career interests and gives me a chance to contribute while learning from a practical team.`
-      },
-      {
-        question: "Which skills or experience would you bring?",
-        answer: skills.length
-          ? `${grounding} Relevant skills from my resume include ${skills.join(", ")}.`
-          : grounding
-      }
-    ]
-  };
-}
-
 async function generateApplicationCopy(profile, internship, studentName, matchedSkills) {
-  const fallback = buildFallbackCopy(profile, internship, studentName, matchedSkills);
   const prompt = `Create role-tailored resume bullet suggestions, a concise cover letter and two short draft answers for this student. Use only the supplied resume facts and role details. Do not invent achievements, employers, dates, metrics, or qualifications. Bullet suggestions must be faithful rewrites of the supplied evidence; return an empty list if there is no evidence to rewrite. Return JSON: {"resumeBulletSuggestions":["..."],"coverLetter":"...","applicationAnswers":[{"question":"...","answer":"..."}]}.\n` +
     `Student: ${studentName || "Applicant"}\nRole: ${internship.title} at ${internship.company}\n` +
     `Matched resume skills: ${matchedSkills.join(", ")}\nResume evidence: ${[...(profile.projects || []), ...(profile.experience || [])].join("; ")}\n` +
     `Resume excerpt: ${String(profile.resumeText || "").slice(0, 5000)}`;
   const geminiResult = await generateGeminiJson(prompt);
-  if (geminiResult) {
-    if (typeof geminiResult !== "object" || Array.isArray(geminiResult)) {
-      throw httpError(502, "Gemini returned invalid application material.");
-    }
-    return {
-      coverLetter: typeof geminiResult.coverLetter === "string" && geminiResult.coverLetter.trim()
-        ? geminiResult.coverLetter.trim().slice(0, 12000)
-        : fallback.coverLetter,
-      resumeBulletSuggestions: Array.isArray(geminiResult.resumeBulletSuggestions)
-        ? geminiResult.resumeBulletSuggestions
-          .filter((item) => typeof item === "string" && item.trim())
-          .slice(0, 8)
-          .map((item) => item.trim().slice(0, 1000))
-        : fallback.resumeBulletSuggestions,
-      applicationAnswers: Array.isArray(geminiResult.applicationAnswers)
-        ? geminiResult.applicationAnswers
-          .filter((item) => typeof item?.question === "string" && typeof item?.answer === "string")
-          .slice(0, 5)
-          .map((item) => ({
-            question: item.question.trim().slice(0, 300),
-            answer: item.answer.trim().slice(0, 4000)
-          }))
-        : fallback.applicationAnswers,
-      aiGenerated: true,
-      aiProvider: "Gemini"
-    };
+  if (
+    !geminiResult || typeof geminiResult !== "object" || Array.isArray(geminiResult)
+    || typeof geminiResult.coverLetter !== "string" || !geminiResult.coverLetter.trim()
+    || !Array.isArray(geminiResult.resumeBulletSuggestions)
+    || !Array.isArray(geminiResult.applicationAnswers)
+  ) {
+    throw httpError(502, "Gemini returned invalid application material.");
   }
-
-  const response = await generateLocalText(prompt);
-  if (!response) return { ...fallback, aiGenerated: false, aiProvider: "Rule-based" };
-  try {
-    const data = JSON.parse(response.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-    return {
-      coverLetter: typeof data.coverLetter === "string" && data.coverLetter.trim() ? data.coverLetter.trim().slice(0, 12000) : fallback.coverLetter,
-      resumeBulletSuggestions: Array.isArray(data.resumeBulletSuggestions)
-        ? data.resumeBulletSuggestions.filter((item) => typeof item === "string").slice(0, 8).map((item) => item.slice(0, 1000))
-        : fallback.resumeBulletSuggestions,
-      applicationAnswers: Array.isArray(data.applicationAnswers)
-        ? data.applicationAnswers
-          .filter((item) => typeof item.question === "string" && typeof item.answer === "string")
-          .slice(0, 5)
-          .map((item) => ({ question: item.question.slice(0, 300), answer: item.answer.slice(0, 4000) }))
-        : fallback.applicationAnswers,
-      aiGenerated: true,
-      aiProvider: "Ollama"
-    };
-  } catch {
-    return { ...fallback, aiGenerated: false, aiProvider: "Rule-based" };
-  }
+  return {
+    coverLetter: geminiResult.coverLetter.trim().slice(0, 12000),
+    resumeBulletSuggestions: geminiResult.resumeBulletSuggestions
+      .filter((item) => typeof item === "string" && item.trim())
+      .slice(0, 8)
+      .map((item) => item.trim().slice(0, 1000)),
+    applicationAnswers: geminiResult.applicationAnswers
+      .filter((item) => typeof item?.question === "string" && typeof item?.answer === "string")
+      .slice(0, 5)
+      .map((item) => ({
+        question: item.question.trim().slice(0, 300),
+        answer: item.answer.trim().slice(0, 4000)
+      })),
+    aiGenerated: true,
+    aiProvider: "Gemini"
+  };
 }
 
 export async function generateResumeVariant(profile, internship, studentName = "") {

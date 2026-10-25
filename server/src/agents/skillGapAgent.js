@@ -72,8 +72,7 @@ export async function personalizeSkillGapReport(match, profile, internship) {
     `Resume evidence: ${[...(profile?.projects || []), ...(profile?.experience || [])].slice(0, 12).join("; ").slice(0, 4000)}\n` +
     `Missing skills in match order: ${fallback.missingSkills.join(", ")}`
   );
-  if (!generated) return fallback;
-  if (!Array.isArray(generated.priorities)) {
+  if (!Array.isArray(generated?.priorities)) {
     throw httpError(502, "Gemini returned an invalid skill roadmap.");
   }
 
@@ -81,6 +80,16 @@ export async function personalizeSkillGapReport(match, profile, internship) {
   const bySkill = new Map(generated.priorities
     .filter((item) => item && typeof item.skill === "string" && allowed.has(item.skill.toLowerCase()))
     .map((item) => [item.skill.toLowerCase(), item]));
+  const complete = fallback.missingSkills.every((skill) => {
+    const item = bySkill.get(skill.toLowerCase());
+    return item
+      && ["High", "Medium"].includes(item.priority)
+      && Number.isFinite(item.estimatedDays)
+      && typeof item.suggestedAction === "string" && item.suggestedAction.trim()
+      && typeof item.miniProject === "string" && item.miniProject.trim();
+  });
+  if (!complete) throw httpError(502, "Gemini returned an incomplete skill roadmap.");
+
   return {
     ...fallback,
     aiGenerated: true,
@@ -89,16 +98,10 @@ export async function personalizeSkillGapReport(match, profile, internship) {
       const item = bySkill.get(skill.toLowerCase());
       return {
         ...fallback.priorities[index],
-        priority: item?.priority === "High" ? "High" : "Medium",
-        estimatedDays: Number.isFinite(item?.estimatedDays)
-          ? Math.max(1, Math.min(90, Math.round(item.estimatedDays)))
-          : fallback.priorities[index].estimatedDays,
-        suggestedAction: typeof item?.suggestedAction === "string" && item.suggestedAction.trim()
-          ? item.suggestedAction.trim().slice(0, 500)
-          : fallback.priorities[index].suggestedAction,
-        miniProject: typeof item?.miniProject === "string" && item.miniProject.trim()
-          ? item.miniProject.trim().slice(0, 500)
-          : fallback.priorities[index].miniProject
+        priority: item.priority,
+        estimatedDays: Math.max(1, Math.min(90, Math.round(item.estimatedDays))),
+        suggestedAction: item.suggestedAction.trim().slice(0, 500),
+        miniProject: item.miniProject.trim().slice(0, 500)
       };
     })
   };

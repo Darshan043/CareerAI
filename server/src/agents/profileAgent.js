@@ -1,5 +1,5 @@
 import { PDFParse } from "pdf-parse";
-import { generateEmbedding, generateLocalText } from "../services/ollamaService.js";
+import { generateEmbedding } from "../services/ollamaService.js";
 import { generateGeminiJson } from "../services/geminiService.js";
 import { extractSkills, summarizeText } from "../utils/text.js";
 import { httpError } from "../utils/httpError.js";
@@ -105,39 +105,19 @@ export async function analyzeResumeText(text, skills = extractSkills(text), role
   const fallback = fallbackAnalysis(text, skills, roles);
   const prompt = `Review the supplied resume using only facts it contains. Return JSON with a concise summary string and arrays strengths and weaknesses (up to 4 short items each). Do not infer personal details or claim skills not evidenced. Identify concrete, truthful improvement suggestions in weaknesses.\n\nResume:\n${String(text).slice(0, 9000)}`;
   const geminiResult = await generateGeminiJson(prompt);
-  if (geminiResult) {
-    if (typeof geminiResult !== "object" || Array.isArray(geminiResult)) {
-      throw httpError(502, "Gemini returned an invalid resume analysis.");
-    }
-    return {
-      summary: typeof geminiResult.summary === "string" && geminiResult.summary.trim()
-        ? geminiResult.summary.trim().slice(0, 5000)
-        : fallback.summary,
-      strengths: cleanItems(geminiResult.strengths).length
-        ? cleanItems(geminiResult.strengths)
-        : fallback.strengths,
-      weaknesses: cleanItems(geminiResult.weaknesses).length
-        ? cleanItems(geminiResult.weaknesses)
-        : fallback.weaknesses,
-      missingSkills: fallback.missingSkills,
-      aiGenerated: true,
-      aiProvider: "Gemini"
-    };
+  if (
+    !geminiResult || typeof geminiResult !== "object" || Array.isArray(geminiResult)
+    || typeof geminiResult.summary !== "string" || !geminiResult.summary.trim()
+    || !Array.isArray(geminiResult.strengths) || !Array.isArray(geminiResult.weaknesses)
+  ) {
+    throw httpError(502, "Gemini returned an invalid resume analysis.");
   }
-
-  const raw = await generateLocalText(prompt);
-  if (!raw) return { ...fallback, aiGenerated: false, aiProvider: "Rule-based" };
-  try {
-    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-    return {
-      summary: typeof parsed.summary === "string" && parsed.summary.trim() ? parsed.summary.trim().slice(0, 5000) : fallback.summary,
-      strengths: cleanItems(parsed.strengths).length ? cleanItems(parsed.strengths) : fallback.strengths,
-      weaknesses: cleanItems(parsed.weaknesses).length ? cleanItems(parsed.weaknesses) : fallback.weaknesses,
-      missingSkills: fallback.missingSkills,
-      aiGenerated: true,
-      aiProvider: "Ollama"
-    };
-  } catch {
-    return { ...fallback, aiGenerated: false, aiProvider: "Rule-based" };
-  }
+  return {
+    summary: geminiResult.summary.trim().slice(0, 5000),
+    strengths: cleanItems(geminiResult.strengths),
+    weaknesses: cleanItems(geminiResult.weaknesses),
+    missingSkills: fallback.missingSkills,
+    aiGenerated: true,
+    aiProvider: "Gemini"
+  };
 }
