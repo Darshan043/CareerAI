@@ -94,29 +94,59 @@ test("registration, login, invalid credentials, and protected identity", async (
   }
 });
 
-test("deployed Vercel origin is allowed for CORS preflight and API requests", async () => {
-  const origin = "https://career-ai-indol-delta.vercel.app";
-  const preflight = await fetch(`${baseUrl}/api/auth/login`, {
-    method: "OPTIONS",
-    headers: {
-      origin,
-      "access-control-request-method": "POST",
-      "access-control-request-headers": "content-type,authorization"
+test("configured Vercel origins and localhost pass CORS; missing and unapproved origins are handled", async () => {
+  const originalClientUrl = env.clientUrl;
+  const originalClientUrls = env.clientUrls;
+  const originalNodeEnv = env.nodeEnv;
+  const origins = [
+    "https://career-ai-indol-delta.vercel.app",
+    "https://career-dcp5731lz-darshans-projects-b16d4678.vercel.app"
+  ];
+
+  try {
+    env.clientUrl = origins[0];
+    env.clientUrls = [origins[1]];
+    env.nodeEnv = "development";
+
+    for (const origin of origins) {
+      const preflight = await fetch(`${baseUrl}/api/auth/login`, {
+        method: "OPTIONS",
+        headers: {
+          origin,
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type,authorization"
+        }
+      });
+
+      assert.equal(preflight.status, 204);
+      assert.equal(preflight.headers.get("access-control-allow-origin"), origin);
+      assert.equal(preflight.headers.get("access-control-allow-credentials"), "true");
+      assert.match(preflight.headers.get("access-control-allow-methods") || "", /POST/);
     }
-  });
 
-  assert.equal(preflight.status, 204);
-  assert.equal(preflight.headers.get("access-control-allow-origin"), origin);
-  assert.equal(preflight.headers.get("access-control-allow-credentials"), "true");
-  assert.match(preflight.headers.get("access-control-allow-methods") || "", /POST/);
+    const localhostPreflight = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://localhost:5173",
+        "access-control-request-method": "POST"
+      }
+    });
+    assert.equal(localhostPreflight.status, 204);
+    assert.equal(localhostPreflight.headers.get("access-control-allow-origin"), "http://localhost:5173");
 
-  const login = await fetch(`${baseUrl}/api/auth/login`, {
-    method: "POST",
-    headers: { origin, "content-type": "application/json" },
-    body: JSON.stringify({ email: "missing@example.invalid", password: "incorrect" })
-  });
-  assert.equal(login.status, 401);
-  assert.equal(login.headers.get("access-control-allow-origin"), origin);
+    const serverToServer = await fetch(`${baseUrl}/api/health`);
+    assert.equal(serverToServer.status, 200);
+
+    const unapproved = await fetch(`${baseUrl}/api/health`, {
+      headers: { origin: "https://unapproved.example.invalid" }
+    });
+    assert.equal(unapproved.status, 500);
+    assert.equal(unapproved.headers.get("access-control-allow-origin"), null);
+  } finally {
+    env.clientUrl = originalClientUrl;
+    env.clientUrls = originalClientUrls;
+    env.nodeEnv = originalNodeEnv;
+  }
 });
 
 test("server error logs include diagnostic stack details while redacting credentials and email", () => {

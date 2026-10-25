@@ -15,12 +15,13 @@ import { errorHandler, notFound } from "./middleware/errorHandler.js";
 
 export const app = express();
 
-const configuredOrigins = new Set([
-  env.clientUrl,
-  ...env.clientUrls,
-  "https://career-ai-indol-delta.vercel.app"
-]);
 const developmentOriginPattern = /^http:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+):\d+$/;
+
+function isAllowedOrigin(origin) {
+  const configuredOrigins = new Set([env.clientUrl, ...env.clientUrls].filter(Boolean));
+  return configuredOrigins.has(origin)
+    || (env.nodeEnv === "development" && developmentOriginPattern.test(origin));
+}
 
 app.use(
   cors({
@@ -29,7 +30,7 @@ app.use(
         callback(null, true);
         return;
       }
-      if (configuredOrigins.has(origin) || (env.nodeEnv === "development" && developmentOriginPattern.test(origin))) {
+      if (isAllowedOrigin(origin)) {
         callback(null, true);
         return;
       }

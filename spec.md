@@ -1,5 +1,13 @@
 # CareerPilot AI implementation status
 
+## Vercel CORS allowlist configuration — 2026-10-25
+
+- Removed the single hardcoded Vercel origin from `server/src/app.js`. CORS now checks the current `CLIENT_URL` plus comma-separated `CLIENT_URLS` values, so intended deployment origins are managed in Render environment settings without embedding a list of temporary preview URLs in source.
+- Configure Render with `CLIENT_URL=https://career-ai-indol-delta.vercel.app` and `CLIENT_URLS=https://career-dcp5731lz-darshans-projects-b16d4678.vercel.app` (append other intentional origins comma-separated). Both origins use the existing credentialed CORS middleware and support preflight. Production configuration already validates these values as HTTPS origins.
+- Requests with no `Origin` header remain allowed for server-to-server clients. Localhost origins remain allowed by the existing development-only pattern; arbitrary origins are rejected. `.env.example` documents the Render variable format.
+- Backend test coverage now checks both configured Vercel origins, localhost in development, no-origin health requests, and rejection of an unapproved origin. `npm.cmd test`: **26 passed, 0 failed**.
+- The live Render deployment was not changed or verified. Push and deploy the backend before claiming the reported live CORS error is resolved.
+
 ## Production HTTP 500 investigation — 2026-10-25
 
 - **Code trace**: `POST /api/auth/login` is mounted by `server/src/app.js` and `server/src/routes/authRoutes.js`. The controller validates credentials, loads the Mongo `users` document with `select: "+password"` (the model otherwise excludes the password field), compares with bcrypt, and signs a JWT. It does not mutate the database. The shared frontend Axios client appends exactly one `/api` to `VITE_API_URL`; the login call is `/auth/login` relative to that base. The configured Vercel origin remains in the backend CORS allowlist, and the CORS middleware handles preflight.
