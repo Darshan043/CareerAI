@@ -1,0 +1,39 @@
+{
+  "name": "careerpilot-ai-server",
+  "version": "1.0.0",
+  "description": "CareerPilot AI backend API",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "lint": "node --check src/server.js && node --check src/config/env.js && node --check src/config/db.js && node --check src/controllers/profileController.js && node --check src/agents/profileAgent.js && node --check src/utils/text.js && node --check scripts/verify-mongo-flow.js && node --check test/auth.test.js",
+    "test": "node --test",
+    "verify:mongo": "node scripts/verify-mongo-flow.js"
+  },
+  "dependencies": {
+    "@langchain/core": "1.1.49",
+    "@langchain/langgraph": "1.4.2",
+    "axios": "^1.20.0",
+    "bcryptjs": "^2.4.3",
+    "bullmq": "^5.34.5",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ioredis": "^5.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.3",
+    "multer": "^2.5.0",
+    "node-cron": "4.2.1",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.49.1"
+  },
+  "overrides": {
+    "proxy-addr": "^2.0.8",
+    "qs": "^6.16.0",
+    "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

@@ -1,0 +1,13 @@
+# Local environment and credentials
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies and generated output
+**/node_modules/
+**/dist/
+**/coverage/
+
+# Logs
+*.log
+npm-debug.log*
