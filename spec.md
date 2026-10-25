@@ -1,5 +1,15 @@
 # CareerPilot AI implementation status
 
+## Production HTTP 500 investigation — 2026-10-25
+
+- **Code trace**: `POST /api/auth/login` is mounted by `server/src/app.js` and `server/src/routes/authRoutes.js`. The controller validates credentials, loads the Mongo `users` document with `select: "+password"` (the model otherwise excludes the password field), compares with bcrypt, and signs a JWT. It does not mutate the database. The shared frontend Axios client appends exactly one `/api` to `VITE_API_URL`; the login call is `/auth/login` relative to that base. The configured Vercel origin remains in the backend CORS allowlist, and the CORS middleware handles preflight.
+- **Live probe and root-cause status**: A read-only POST to the deployed login endpoint using a synthetic nonexistent account returned **401 `Invalid email or password.`**, not 500. Because `assertJwtSecret()` runs before the user lookup, this confirms the deployed JWT secret passes the configured check and the unauthenticated login path can query MongoDB. It does not reproduce a 500 for the affected account, so the account-specific production root cause is **not yet confirmed**. No live credentials or database records were used. The live health and preflight probes were intermittently unreachable from this environment. Do not treat this local change as proof the deployed issue is fixed.
+- **Diagnostic correction**: Unexpected 5xx logs now include the server-side error message and stack while redacting email addresses, bearer/JWT-like tokens, credential key/value fields, and MongoDB URIs. Request bodies, headers, and user documents are never logged. API responses remain generic for unexposed server errors.
+- **Regression coverage**: Added a middleware test that forces the 500 handler and verifies message/stack logging, secret and email redaction, and the unchanged generic HTTP response. Existing auth tests exercise register/login and invalid credentials; the deployed-origin preflight/API test remains in place.
+- **Verification**: `server npm.cmd test` passed (**26 passed, 0 failed**). `client npm.cmd run build` passed. These checks are local; the real affected account flow and deployed CORS preflight remain unverified.
+- **Files changed for this investigation**: `server/src/middleware/errorHandler.js`, `server/test/auth.test.js`, and this `spec.md` section. No UI, database configuration, database name, or records were changed.
+- **Next deployment step**: Push the changes and deploy the backend. Retry login once, then inspect the new sanitized `message` and `stack` in Render logs. Use that trace to confirm the account-specific cause before applying any further code or data correction. Keep `CLIENT_URL` and `CLIENT_URLS` configured for the deployed HTTPS frontend origins; keep Vercel `VITE_API_URL=https://careerai-x00j.onrender.com` (the client adds `/api`).
+
 ## Deployment API and CORS correction — 2026-10-25
 
 - **CORS**: Added `https://career-ai-indol-delta.vercel.app` to the backend's explicit origin allowlist. The existing Express CORS middleware handles `OPTIONS` preflight and credentialed API requests for this origin.

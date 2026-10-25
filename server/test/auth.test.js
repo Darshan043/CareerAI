@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { errorHandler } from "../src/middleware/errorHandler.js";
 
 process.env.JWT_SECRET ||= "careerpilot-node-test-secret-0123456789abcdef";
 
@@ -116,6 +117,49 @@ test("deployed Vercel origin is allowed for CORS preflight and API requests", as
   });
   assert.equal(login.status, 401);
   assert.equal(login.headers.get("access-control-allow-origin"), origin);
+});
+
+test("server error logs include diagnostic stack details while redacting credentials and email", () => {
+  const originalConsoleError = console.error;
+  let loggedMessage;
+  let loggedDetails;
+  console.error = (message, details) => {
+    loggedMessage = message;
+    loggedDetails = details;
+  };
+  const response = {
+    statusCode: null,
+    body: null,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    }
+  };
+  const error = new Error(
+    "Database operation failed for student@example.com password=hunter2 token=abc123 mongodb+srv://user:pass@cluster.example/db"
+  );
+
+  try {
+    errorHandler(error, {}, response, () => {});
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(loggedMessage, "Unhandled API request error");
+  assert.equal(loggedDetails.status, 500);
+  assert.equal(loggedDetails.message.startsWith("Database operation failed"), true);
+  assert.match(loggedDetails.stack, /Error: Database operation failed/);
+  assert.match(loggedDetails.message, /\[REDACTED_EMAIL\]/);
+  assert.match(loggedDetails.message, /password=\[REDACTED\]/);
+  assert.match(loggedDetails.message, /token=\[REDACTED\]/);
+  assert.match(loggedDetails.message, /\[REDACTED_MONGODB_URI\]/);
+  assert.doesNotMatch(JSON.stringify(loggedDetails), /student@example\.com|hunter2|abc123|mongodb\+srv:\/\/user/);
+  assert.equal(response.statusCode, 500);
+  assert.deepEqual(response.body, { message: "Something went wrong." });
 });
 
 test("Mongoose models enforce user and application fields", async () => {
