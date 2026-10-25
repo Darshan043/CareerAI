@@ -93,6 +93,31 @@ test("registration, login, invalid credentials, and protected identity", async (
   }
 });
 
+test("deployed Vercel origin is allowed for CORS preflight and API requests", async () => {
+  const origin = "https://career-ai-indol-delta.vercel.app";
+  const preflight = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "OPTIONS",
+    headers: {
+      origin,
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "content-type,authorization"
+    }
+  });
+
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), origin);
+  assert.equal(preflight.headers.get("access-control-allow-credentials"), "true");
+  assert.match(preflight.headers.get("access-control-allow-methods") || "", /POST/);
+
+  const login = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { origin, "content-type": "application/json" },
+    body: JSON.stringify({ email: "missing@example.invalid", password: "incorrect" })
+  });
+  assert.equal(login.status, 401);
+  assert.equal(login.headers.get("access-control-allow-origin"), origin);
+});
+
 test("Mongoose models enforce user and application fields", async () => {
   const [{ User }, { Application }] = await Promise.all([
     import("../src/models/User.js"),

@@ -1,5 +1,13 @@
 # CareerPilot AI implementation status
 
+## Deployment API and CORS correction — 2026-10-25
+
+- **CORS**: Added `https://career-ai-indol-delta.vercel.app` to the backend's explicit origin allowlist. The existing Express CORS middleware handles `OPTIONS` preflight and credentialed API requests for this origin.
+- **Login route**: Confirmed the frontend uses `POST /auth/login` relative to the API base, while Express mounts auth at `/api/auth`; the complete route is `POST /api/auth/login`. All frontend API calls share this same Axios client and keep route paths relative to the `/api` prefix.
+- **API base URL**: The client now accepts either a bare host (`https://careerai-x00j.onrender.com`) or a host already ending in `/api`, trims trailing slashes, and applies exactly one `/api` prefix. The local development fallback and Vite proxy remain unchanged. `client/.env.example` documents the Vercel production setting.
+- **Verification performed**: `server npm.cmd test` passed (**25 passed, 0 failed**), including a new test confirming the deployed origin receives CORS headers on preflight and an API login response. `client npm.cmd run build` passed with Vite 8.3.5. Backend tests use the existing test repository/mocks; no database configuration or records were changed. The production frontend URL and deployed Render service were not called from these local checks.
+- **Deployment configuration**: In Vercel, set `VITE_API_URL=https://careerai-x00j.onrender.com` and redeploy so the value is included in the built client. In Render, set `CLIENT_URL=https://career-ai-indol-delta.vercel.app` (and `CLIENT_URLS` as needed for any additional HTTPS frontend origins), then deploy the backend. Existing required database and secret variables remain as configured; this code change does not alter them.
+
 ## JSearch primary with Himalayas fallback — 2026-10-25
 
 - **Search flow**: The authenticated `GET /api/internships/search` route queries JSearch first for Indian roles, then combines eligible Himalayas results. Himalayas remains enabled and is used when JSearch is unconfigured, rate-limited, or temporarily unavailable. Successful results from either source are retained; the response identifies fallback mode and each listing retains its source and original application URL.
